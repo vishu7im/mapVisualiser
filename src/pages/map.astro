@@ -806,6 +806,7 @@ import "leaflet.markercluster/dist/MarkerCluster.Default.css";
       nearbyList.querySelectorAll<HTMLElement>(".nearby-card").forEach((el) => {
         el.addEventListener("click", () => openDetail(parseInt(el.dataset.i!)));
       });
+      nearbyList.scrollTo({ top: 0, behavior: "smooth" });
       nearbySection.classList.remove("hidden");
     } else {
       nearbySection.classList.add("hidden");

@@ -113,7 +113,7 @@ h1, h2, h3, h4 {
 .anim-fade-up-2 { animation-delay: 0.2s; }
 .anim-fade-up-3 { animation-delay: 0.3s; }
 .anim-fade-up-4 { animation-delay: 0.4s; }
-
+/* 
 #nearby-list {
   display: flex;
   flex-direction: column;
@@ -209,4 +209,4 @@ h1, h2, h3, h4 {
   color: var(--cyan);
   font-size: .72rem;
   font-weight: 600;
-}
+} */

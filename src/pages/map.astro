@@ -725,9 +725,17 @@ import "leaflet.markercluster/dist/MarkerCluster.Default.css";
     return data
       .map((_, i) => ({
         i,
-        d: i === idx
-          ? Number.MAX_VALUE
-          : parseFloat(haversine(data[idx].lat, data[idx].lng, data[i].lat, data[i].lng)),
+        d:
+          i === idx
+            ? Number.MAX_VALUE
+            : parseFloat(
+                haversine(
+                  data[idx].lat,
+                  data[idx].lng,
+                  data[i].lat,
+                  data[i].lng,
+                ),
+              ),
       }))
       .filter((x) => x.i !== idx)
       .sort((a, b) => a.d - b.d)
@@ -772,15 +780,27 @@ import "leaflet.markercluster/dist/MarkerCluster.Default.css";
       nearbyCountBadge.textContent = nearby.length.toString();
       nearbyList.innerHTML = nearby
         .map(
-          ({ i, d }, rank) =>
-            `<div class="nearby-card" data-i="${i}">
-           <div class="nearby-rank">${rank + 1}</div>
-           <div class="nearby-info">
-             <div class="nearby-name">${esc(data[i].name)}</div>
-             <div class="nearby-id">#${i + 1}</div>
-           </div>
-           <div class="nearby-dist-pill">${d} km</div>
-         </div>`,
+          ({ i, d }, rank) => `
+      <div class="nearby-card" data-i="${i}">
+        <div class="nearby-rank">
+          ${rank + 1}
+        </div>
+
+        <div class="nearby-info">
+          <div class="nearby-name">
+            ${esc(data[i].name)}
+          </div>
+
+          <div class="nearby-id">
+            #${i + 1}
+          </div>
+        </div>
+
+        <div class="nearby-dist-pill">
+          ${d} km
+        </div>
+      </div>
+    `,
         )
         .join("");
       nearbyList.querySelectorAll<HTMLElement>(".nearby-card").forEach((el) => {

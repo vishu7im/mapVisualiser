@@ -102,8 +102,40 @@ import "leaflet.markercluster/dist/MarkerCluster.Default.css";
     <div class="map-wrap">
       <div id="map"></div>
 
+      <!-- Location opt-in hint (dismissible, never auto-requests) -->
+      <div id="loc-hint" class="loc-hint glass hidden">
+        <span class="loc-hint-dot"></span>
+        <span class="loc-hint-text">See how far each place is from you</span>
+        <button id="loc-hint-enable" class="loc-hint-btn">Use my location</button>
+        <button id="loc-hint-close" class="loc-hint-close" aria-label="Dismiss">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+
+      <div id="loc-toast" class="loc-toast hidden" role="status"></div>
+
       <!-- Map Controls Panel -->
       <div class="map-controls glass">
+        <!-- My location (asks permission only on tap) -->
+        <button id="btn-locate" class="ctrl-btn" title="Show my location">
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.2"
+          >
+            <circle cx="12" cy="12" r="4"></circle>
+            <line x1="12" y1="2" x2="12" y2="5"></line>
+            <line x1="12" y1="19" x2="12" y2="22"></line>
+            <line x1="2" y1="12" x2="5" y2="12"></line>
+            <line x1="19" y1="12" x2="22" y2="12"></line>
+          </svg>
+        </button>
+        <div class="ctrl-divider"></div>
         <!-- Fit all -->
         <button id="btn-fit-all" class="ctrl-btn" title="Fit all markers">
           <svg
@@ -195,6 +227,14 @@ import "leaflet.markercluster/dist/MarkerCluster.Default.css";
         <p class="welcome-sub">
           Click any marker on the map or search above to view details.
         </p>
+
+        <div id="you-nearest" class="you-nearest hidden">
+          <div class="nearby-header">
+            <p class="section-label">Nearest to you</p>
+            <span id="you-accuracy" class="you-accuracy"></span>
+          </div>
+          <div id="you-nearest-list"></div>
+        </div>
       </div>
 
       <!-- Detail state -->
@@ -341,6 +381,30 @@ import "leaflet.markercluster/dist/MarkerCluster.Default.css";
             </svg>
             <span id="panel-dist">—</span>
             <span class="dist-unit">km</span>
+          </div>
+        </div>
+
+        <!-- Distance from user's live location -->
+        <div id="you-section" class="detail-section hidden">
+          <p class="section-label">From your location</p>
+          <div class="you-row">
+            <div class="dist-pill you-pill">
+              <span class="you-dot-sm"></span>
+              <span id="you-dist">—</span>
+              <span id="you-unit" class="dist-unit">km</span>
+            </div>
+            <a
+              id="you-directions"
+              href="#"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="maps-btn"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 12h13"></path><polyline points="12,6 18,12 12,18"></polyline><line x1="21" y1="4" x2="21" y2="20"></line>
+              </svg>
+              Directions
+            </a>
           </div>
         </div>
 
@@ -507,6 +571,20 @@ import "leaflet.markercluster/dist/MarkerCluster.Default.css";
   const statRoute = document.getElementById("stat-route")!;
   const statCoverage = document.getElementById("stat-coverage")!;
   const overviewList = document.getElementById("overview-list")!;
+  const btnLocate = document.getElementById("btn-locate")!;
+  const locHint = document.getElementById("loc-hint")!;
+  const locHintEnable = document.getElementById("loc-hint-enable")!;
+  const locHintClose = document.getElementById("loc-hint-close")!;
+  const locToast = document.getElementById("loc-toast")!;
+  const youSection = document.getElementById("you-section")!;
+  const youDist = document.getElementById("you-dist")!;
+  const youUnit = document.getElementById("you-unit")!;
+  const youDirections = document.getElementById(
+    "you-directions",
+  ) as HTMLAnchorElement;
+  const youNearest = document.getElementById("you-nearest")!;
+  const youNearestList = document.getElementById("you-nearest-list")!;
+  const youAccuracy = document.getElementById("you-accuracy")!;
 
   /* ── Badge ─────────────────────────────────────────────── */
   locNum.textContent = data.length.toString();
@@ -773,6 +851,8 @@ import "leaflet.markercluster/dist/MarkerCluster.Default.css";
         loc.lng,
       );
 
+    renderYouDetail();
+
     // Nearby
     const nearby = getNearby(index);
     if (nearby.length > 0 && data.length > 1) {
@@ -850,6 +930,7 @@ import "leaflet.markercluster/dist/MarkerCluster.Default.css";
     stateDetail.classList.add("hidden");
     stateWelcome.classList.remove("hidden");
     document.querySelector(".sidebar")?.classList.remove("mobile-open");
+    renderYouDetail();
   }
 
   btnPrev.addEventListener("click", () =>
@@ -1004,6 +1085,205 @@ import "leaflet.markercluster/dist/MarkerCluster.Default.css";
   document.addEventListener("click", (e) => {
     if (!(e.target as Element).closest(".nav-search-wrap")) closeSearch();
   });
+
+  /* ── My location (opt-in, live GPS) ────────────────────── */
+  type Me = { lat: number; lng: number; acc: number };
+  let me: Me | null = null;
+  let watchId: number | null = null;
+  let firstFix = true;
+  let meMarker: L.Marker | null = null;
+  let meAccuracy: L.Circle | null = null;
+  const meLine = L.polyline([], {
+    color: "#22d3ee",
+    weight: 2.5,
+    opacity: 0.85,
+    dashArray: "6 8",
+    interactive: false,
+  });
+
+  const meIcon = L.divIcon({
+    className: "",
+    html: '<div class="me-marker"><span class="me-pulse"></span><span class="me-dot"></span></div>',
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+  });
+
+  let toastTimer = 0;
+  function toast(msg: string) {
+    locToast.textContent = msg;
+    locToast.classList.remove("hidden");
+    clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => locToast.classList.add("hidden"), 4000);
+  }
+
+  function fmtDist(km: number): { v: string; u: string } {
+    if (km < 1) return { v: Math.round(km * 1000).toString(), u: "m" };
+    return { v: fmtKm(km), u: "km" };
+  }
+
+  function kmFromMe(loc: Loc) {
+    return me ? parseFloat(haversine(me.lat, me.lng, loc.lat, loc.lng)) : 0;
+  }
+
+  function setLocateState(state: "idle" | "locating" | "active") {
+    btnLocate.classList.toggle("active", state === "active");
+    btnLocate.classList.toggle("locating", state === "locating");
+    btnLocate.title =
+      state === "active" ? "Stop sharing my location" : "Show my location";
+  }
+
+  function renderYouDetail() {
+    const show = !!me && activeIdx !== -1;
+    youSection.classList.toggle("hidden", !show);
+    if (!show) {
+      if (map.hasLayer(meLine)) map.removeLayer(meLine);
+      return;
+    }
+    const loc = data[activeIdx];
+    const { v, u } = fmtDist(kmFromMe(loc));
+    youDist.textContent = v;
+    youUnit.textContent = u;
+    youDirections.href = `https://www.google.com/maps/dir/?api=1&origin=${me!.lat},${me!.lng}&destination=${loc.lat},${loc.lng}`;
+    meLine.setLatLngs([
+      [me!.lat, me!.lng],
+      [loc.lat, loc.lng],
+    ]);
+    if (!map.hasLayer(meLine)) meLine.addTo(map);
+  }
+
+  function renderYouNearest() {
+    if (!me) {
+      youNearest.classList.add("hidden");
+      return;
+    }
+    const top = data
+      .map((loc, i) => ({ i, d: kmFromMe(loc) }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, 3);
+    youAccuracy.textContent = `±${Math.round(me.acc)} m`;
+    youNearestList.innerHTML = top
+      .map(({ i, d }) => {
+        const { v, u } = fmtDist(d);
+        return `<div class="nearby-card" data-i="${i}">
+          <div class="nearby-rank">${i + 1}</div>
+          <div class="nearby-info"><div class="nearby-name">${esc(data[i].name)}</div></div>
+          <div class="nearby-dist-pill you-dist-pill">${v} ${u}</div>
+        </div>`;
+      })
+      .join("");
+    youNearestList.querySelectorAll<HTMLElement>(".nearby-card").forEach((el) => {
+      el.addEventListener("click", () => openDetail(parseInt(el.dataset.i!)));
+    });
+    youNearest.classList.remove("hidden");
+  }
+
+  function onPosition(pos: GeolocationPosition) {
+    const { latitude: lat, longitude: lng, accuracy: acc } = pos.coords;
+    me = { lat, lng, acc };
+    if (!meMarker) {
+      meMarker = L.marker([lat, lng], {
+        icon: meIcon,
+        zIndexOffset: 1000,
+        keyboard: false,
+      })
+        .bindTooltip("You are here", { direction: "top", offset: [0, -10] })
+        .addTo(map);
+      meAccuracy = L.circle([lat, lng], {
+        radius: acc,
+        color: "#22d3ee",
+        weight: 1,
+        opacity: 0.5,
+        fillColor: "#22d3ee",
+        fillOpacity: 0.1,
+        interactive: false,
+      }).addTo(map);
+    } else {
+      meMarker.setLatLng([lat, lng]);
+      meAccuracy!.setLatLng([lat, lng]).setRadius(acc);
+    }
+    setLocateState("active");
+    renderYouDetail();
+    renderYouNearest();
+
+    if (firstFix) {
+      firstFix = false;
+      // Frame the user together with their nearest location for instant context
+      const nearest = data.reduce((best, loc) =>
+        kmFromMe(loc) < kmFromMe(best) ? loc : best,
+      );
+      map.fitBounds(
+        L.latLngBounds([
+          [lat, lng],
+          [nearest.lat, nearest.lng],
+        ]),
+        { padding: [70, 70], maxZoom: 15 },
+      );
+    }
+  }
+
+  function onPositionError(err: GeolocationPositionError) {
+    const msgs: Record<number, string> = {
+      1: "Location permission denied. Enable it in your browser settings to see distances from you.",
+      2: "Couldn't get your location. Check that GPS / location services are on.",
+      3: "Location request timed out. Try again.",
+    };
+    toast(msgs[err.code] ?? "Couldn't get your location.");
+    // Keep tracking through transient errors once we already have a fix
+    if (err.code === 1 || !me) stopLocating();
+  }
+
+  function startLocating() {
+    if (!("geolocation" in navigator)) {
+      toast("Your browser doesn't support location.");
+      return;
+    }
+    if (!window.isSecureContext) {
+      toast("Location needs a secure (https) connection.");
+      return;
+    }
+    hideHint(true);
+    setLocateState("locating");
+    firstFix = true;
+    watchId = navigator.geolocation.watchPosition(onPosition, onPositionError, {
+      enableHighAccuracy: true,
+      maximumAge: 5000,
+      timeout: 20000,
+    });
+  }
+
+  function stopLocating() {
+    if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+    watchId = null;
+    me = null;
+    if (meMarker) map.removeLayer(meMarker);
+    if (meAccuracy) map.removeLayer(meAccuracy);
+    meMarker = null;
+    meAccuracy = null;
+    setLocateState("idle");
+    renderYouDetail();
+    renderYouNearest();
+  }
+
+  btnLocate.addEventListener("click", () => {
+    if (watchId === null) startLocating();
+    else stopLocating();
+  });
+
+  /* Opt-in hint: shown once per browser until used or dismissed */
+  const HINT_KEY = "geomapper:locHintDismissed";
+  function hideHint(remember: boolean) {
+    locHint.classList.add("hidden");
+    if (remember) {
+      try { localStorage.setItem(HINT_KEY, "1"); } catch {}
+    }
+  }
+  let hintDismissed = false;
+  try { hintDismissed = localStorage.getItem(HINT_KEY) === "1"; } catch {}
+  if (!hintDismissed && "geolocation" in navigator) {
+    setTimeout(() => locHint.classList.remove("hidden"), 1200);
+  }
+  locHintEnable.addEventListener("click", startLocating);
+  locHintClose.addEventListener("click", () => hideHint(true));
 
   /* ── Hide loading ──────────────────────────────────────── */
   loadingEl.style.transition = "opacity 0.4s";
@@ -1878,6 +2158,163 @@ import "leaflet.markercluster/dist/MarkerCluster.Default.css";
     background: transparent !important;
   }
 
+  /* ── My location ────────────────────────────────────────── */
+  .ctrl-btn#btn-locate.active {
+    background: rgba(34, 211, 238, 0.16);
+    border-color: rgba(34, 211, 238, 0.4);
+    color: #22d3ee;
+  }
+  .ctrl-btn#btn-locate.locating {
+    color: #22d3ee;
+  }
+  .ctrl-btn#btn-locate.locating svg {
+    animation: spin 1.2s linear infinite;
+  }
+
+  .me-marker {
+    position: relative;
+    width: 22px;
+    height: 22px;
+  }
+  .me-dot {
+    position: absolute;
+    inset: 3px;
+    border-radius: 50%;
+    background: #22d3ee;
+    border: 3px solid #fff;
+    box-shadow: 0 0 10px rgba(34, 211, 238, 0.8);
+  }
+  .me-pulse {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: rgba(34, 211, 238, 0.45);
+    animation: mePulse 2s ease-out infinite;
+  }
+  @keyframes mePulse {
+    from { transform: scale(1); opacity: 0.8; }
+    to { transform: scale(3); opacity: 0; }
+  }
+
+  .loc-hint {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 600;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 8px 8px 14px;
+    border-radius: 999px;
+    background: rgba(13, 20, 40, 0.94);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+    max-width: calc(100% - 24px);
+    animation: locFloatIn 0.35s ease both;
+  }
+  .loc-hint-dot {
+    flex: none;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #22d3ee;
+    box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.2);
+  }
+  .loc-hint-text {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .loc-hint-btn {
+    flex: none;
+    border: none;
+    border-radius: 999px;
+    padding: 7px 14px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #06202a;
+    background: #22d3ee;
+    cursor: pointer;
+  }
+  .loc-hint-btn:hover {
+    background: #67e8f9;
+  }
+  .loc-hint-close {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .loc-hint-close:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-primary);
+  }
+
+  .loc-toast {
+    position: absolute;
+    left: 50%;
+    bottom: 32px;
+    transform: translateX(-50%);
+    z-index: 650;
+    max-width: min(360px, calc(100% - 100px));
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: rgba(13, 20, 40, 0.96);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    line-height: 1.45;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+    animation: locFloatIn 0.25s ease both;
+  }
+  @keyframes locFloatIn {
+    from { opacity: 0; transform: translate(-50%, 10px); }
+    to { opacity: 1; transform: translate(-50%, 0); }
+  }
+
+  .you-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+  .you-pill {
+    background: rgba(34, 211, 238, 0.08);
+    border-color: rgba(34, 211, 238, 0.28);
+    color: #22d3ee;
+  }
+  .you-dot-sm {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #22d3ee;
+    border: 2px solid #fff;
+  }
+  .you-nearest {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+  }
+  .you-accuracy {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .nearby-dist-pill.you-dist-pill {
+    color: #22d3ee;
+    background: rgba(34, 211, 238, 0.08);
+    border-color: rgba(34, 211, 238, 0.25);
+  }
+
   /* ── Shared utils ───────────────────────────────────────── */
   .hidden {
     display: none !important;
@@ -1910,6 +2347,21 @@ import "leaflet.markercluster/dist/MarkerCluster.Default.css";
     }
     .map-controls {
       bottom: 12px;
+    }
+    .loc-toast {
+      bottom: 12px;
+    }
+    .ctrl-btn {
+      width: 44px;
+      height: 42px;
+    }
+    .loc-hint-text {
+      font-size: 0.75rem;
+    }
+  }
+  @media (max-width: 420px) {
+    .loc-hint-text {
+      display: none;
     }
   }
 </style>

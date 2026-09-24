@@ -114,7 +114,14 @@ import Layout from '../layouts/Layout.astro';
           </div>
         </div>
 
-        <input type="file" id="file-input" accept=".csv" hidden />
+        <!-- Mobile pickers match on MIME type, and many report CSVs as text/comma-separated-values,
+             application/vnd.ms-excel or text/plain — listing only ".csv" greys them out on phones/tablets. -->
+        <input
+          type="file"
+          id="file-input"
+          accept=".csv,text/csv,text/comma-separated-values,application/csv,application/vnd.ms-excel,text/plain"
+          hidden
+        />
       </div>
 
       <!-- Steps -->
@@ -184,7 +191,9 @@ import Layout from '../layouts/Layout.astro';
   }
 
   function processFile(file: File) {
-    if (!file.name.toLowerCase().endsWith('.csv')) {
+    const csvTypes = ['text/csv', 'text/comma-separated-values', 'application/csv', 'application/vnd.ms-excel', 'text/plain'];
+    // Some mobile pickers (e.g. Drive/Files providers) drop the extension, so accept a CSV MIME type too
+    if (!file.name.toLowerCase().endsWith('.csv') && !csvTypes.includes(file.type)) {
       showError('Please upload a .csv file.');
       return;
     }
